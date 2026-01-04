@@ -1,0 +1,130 @@
+name: Upstream Sync Check
+
+on:
+  # Run weekly on Monday at 6am UTC
+  schedule:
+    - cron: '0 6 * * 1'
+  
+  # Allow manual triggering
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/ruvnet/claude-flow.git || true
+          git fetch upstream --tags
+      
+      - name: Get current tracked version
+        id: current
+        run: |
+          if [ -f .upstream-version ]; then
+            CURRENT_VERSION=$(cat .upstream-version)
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "version=unknown" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Get latest upstream version
+        id: upstream
+        run: |
+          LATEST_VERSION=$(git tag -l "v2.*" --sort=-version:refname | head -1 | sed 's/^v//')
+          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$LATEST_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Compare versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.upstream.outputs.version }}"
+          
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "✅ New version available: $LATEST (current: $CURRENT)"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "✅ Already up to date: $CURRENT"
+          fi
+      
+      - name: Create issue for new upstream release
+        if: steps.compare.outputs.needs_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentVersion = '${{ steps.current.outputs.version }}';
+            const latestVersion = '${{ steps.upstream.outputs.version }}';
+            const latestTag = '${{ steps.upstream.outputs.tag }}';
+            
+            // Check if an issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-sync'
+            });
+            
+            const existingIssue = issues.data.find(issue => 
+              issue.title.includes(latestVersion)
+            );
+            
+            if (existingIssue) {
+              console.log('Issue already exists for this version');
+              return;
+            }
+            
+            // Create new issue
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔄 Upstream Release: ${latestTag} Available`,
+              labels: ['upstream-sync', 'enhancement'],
+              body: `## New Upstream Release Detected
+            
+            A new version of upstream \`ruvnet/claude-flow\` is available.
+            
+            ### Version Information
+            - **Current Version**: \`${currentVersion}\`
+            - **Latest Version**: \`${latestVersion}\`
+            - **Release Tag**: [\`${latestTag}\`](https://github.com/ruvnet/claude-flow/releases/tag/${latestTag})
+            
+            ### Action Items
+            
+            - [ ] Review upstream [release notes](https://github.com/ruvnet/claude-flow/releases/tag/${latestTag})
+            - [ ] Review upstream [changelog](https://github.com/ruvnet/claude-flow/compare/v${currentVersion}...${latestTag})
+            - [ ] Assess changes for compatibility with our fork
+            - [ ] Test changes in a branch
+            - [ ] Update \`.upstream-version\` file to \`${latestVersion}\`
+            - [ ] Merge compatible changes
+            - [ ] Close this issue when sync is complete
+            
+            ### Comparison
+            
+            View all changes: https://github.com/ruvnet/claude-flow/compare/v${currentVersion}...${latestTag}
+            
+            ---
+            
+            *This issue was automatically created by the [Upstream Sync workflow](.github/workflows/upstream-sync.yml)*
+            `
+            });
+            
+            console.log(`Created issue #${issue.data.number}`);
+      
+      - name: Summary
+        run: |
+          echo "### Upstream Sync Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Current Version**: ${{ steps.current.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest Version**: ${{ steps.upstream.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Needs Update**: ${{ steps.compare.outputs.needs_update }}" >> $GITHUB_STEP_SUMMARY
