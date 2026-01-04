@@ -1,3 +1,5 @@
+> **Note:** This is a stabilized fork of [ruvnet/claude-flow](https://github.com/ruvnet/claude-flow). See [ATTRIBUTION.md](ATTRIBUTION.md) for details.
+
 # 🌊 Claude-Flow v2.7.0: Enterprise AI Orchestration Platform
 
 <div align="center">
